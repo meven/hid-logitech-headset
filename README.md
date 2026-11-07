@@ -79,9 +79,24 @@ the DKMS copy in `updates/` would otherwise take precedence over the in-tree mod
 
 ## Other headsets
 
-Only the PRO X 2 LIGHTSPEED `0af7` has been tested. The G522 LIGHTSPEED (`0b18`) uses a
-similar protocol with a different frame layout, and is not supported. The PRO X 2 variants
-`0afb` and `0afc` and the older G PRO / PRO X speak HID++ and belong to `hid-logitech-hidpp`.
+Only the PRO X 2 LIGHTSPEED `0af7` has been tested. The PRO X 2 variants `0afb` and `0afc`
+and the older G PRO / PRO X speak HID++ and belong to `hid-logitech-hidpp`. For other models,
+[HeadsetControl](https://github.com/Sapd/HeadsetControl) reads the battery from userspace.
+
+### G522 LIGHTSPEED owners wanted
+
+The G522 LIGHTSPEED (`046d:0b18`) answers on the same vendor page with a different frame
+layout, so the driver can support it with one more table entry. That entry was written from
+HeadsetControl and never run on a real G522, so it is not in the driver.
+
+If you own one, please open an issue with:
+
+- the output of `lsusb -d 046d:0b18`,
+- the report descriptor:
+  `xxd /sys/bus/hid/devices/0003:046D:0B18.*/report_descriptor`,
+- the output of `headsetcontrol -b`, with the headset on, and once while charging.
+
+That is enough to write the support and send you a build to try.
 
 ## License
 
