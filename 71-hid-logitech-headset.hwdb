@@ -1,0 +1,6 @@
+# The USB product string of the PRO X 2 LIGHTSPEED receiver carries no "headset", so
+# 78-sound-card.rules gives its sound card no SOUND_FORM_FACTOR and UPower reports the
+# battery as a generic audio device. Proposed to systemd as
+# https://github.com/systemd/systemd/pull/43737
+usb:v046Dp0AF7*
+ SOUND_FORM_FACTOR=headset

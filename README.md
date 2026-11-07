@@ -19,6 +19,12 @@ as a peripheral and not as the machine's battery. The media keys keep working th
 
 The protocol comes from [HeadsetControl](https://github.com/Sapd/HeadsetControl).
 
+## Arch Linux
+
+The AUR package `hid-logitech-headset-dkms` installs the module through DKMS together with the
+hwdb entry below. If you ran `install.sh` before, run `sudo ./install.sh --remove` first, since
+both install the source to the same place.
+
 ## Install with DKMS
 
     sudo ./install.sh
@@ -58,10 +64,10 @@ checked before the driver existed:
 UPower takes the device kind from the sound card's `SOUND_FORM_FACTOR`, which systemd sets by
 matching the model name. "PRO_X_2_LIGHTSPEED" carries no "headset", so the kind stays
 "audio-device", which the Plasma applet does not list. Until
-https://github.com/systemd/systemd/pull/43737 lands, add it locally:
+https://github.com/systemd/systemd/pull/43737 lands, install the entry from this repository
+(the AUR package installs it for you):
 
-    printf 'usb:v046Dp0AF7*\n SOUND_FORM_FACTOR=headset\n' | \
-        sudo tee /etc/udev/hwdb.d/71-sound-card-local.hwdb
+    sudo install -m 644 71-hid-logitech-headset.hwdb /etc/udev/hwdb.d/
     sudo systemd-hwdb update
     sudo udevadm trigger /sys/class/sound/card*
     sudo systemctl restart upower
