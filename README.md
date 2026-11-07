@@ -21,7 +21,7 @@ The protocol comes from [HeadsetControl](https://github.com/Sapd/HeadsetControl)
 
 ## Arch Linux
 
-The AUR package `hid-logitech-headset-dkms` installs the module through DKMS together with the
+The AUR package [hid-logitech-headset](https://aur.archlinux.org/packages/hid-logitech-headset) installs the module through DKMS together with the
 hwdb entry below. If you ran `install.sh` before, run `sudo ./install.sh --remove` first, since
 both install the source to the same place.
 
