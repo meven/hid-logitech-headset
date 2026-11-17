@@ -1,8 +1,8 @@
 # hid-logitech-headset
 
 Linux kernel driver that reports the battery of the Logitech PRO X 2 LIGHTSPEED headset
-(USB receiver `046d:0af7`) as a power supply, so UPower, GNOME and the Plasma battery applet
-show its level.
+(USB receiver `046d:0af7`) and of the G325 LIGHTSPEED (`046d:0b21`, experimental) as a power
+supply, so UPower, GNOME and the Plasma battery applet show its level.
 
 This is the out-of-tree build of a patch under review on linux-input:
 https://lore.kernel.org/linux-input/20261011124110.62621-1-meven@kde.org/T/#u
@@ -18,6 +18,9 @@ is switched on, and publishes the answer with `POWER_SUPPLY_SCOPE_DEVICE`, so de
 as a peripheral and not as the machine's battery. The media keys keep working through hid-input.
 
 The protocol comes from [HeadsetControl](https://github.com/Sapd/HeadsetControl).
+
+The two supported models share the power supply, the poll and the removal; each one only
+brings its own request and the way to read a frame (`struct logi_headset_info`).
 
 ## Arch Linux
 
@@ -62,8 +65,8 @@ checked before the driver existed:
 ## Shown as a headset in Plasma
 
 UPower takes the device kind from the sound card's `SOUND_FORM_FACTOR`, which systemd sets by
-matching the model name. "PRO_X_2_LIGHTSPEED" carries no "headset", so the kind stays
-"audio-device", which the Plasma applet does not list. Until
+matching the model name. "PRO_X_2_LIGHTSPEED" and "G325 LIGHTSPEED - Wireless Mode" carry no
+"headset", so the kind stays "audio-device", which the Plasma applet does not list. Until
 https://github.com/systemd/systemd/pull/43737 lands, install the entry from this repository
 (the AUR package installs it for you):
 
@@ -77,11 +80,47 @@ https://github.com/systemd/systemd/pull/43737 lands, install the entry from this
 When your distribution kernel includes `hid-logitech-headset`, run `sudo ./install.sh --remove`;
 the DKMS copy in `updates/` would otherwise take precedence over the in-tree module.
 
+## G325 LIGHTSPEED (experimental)
+
+The G325 `046d:0b21` answers on report 0x50 of usage page 0xffa0. The request and the frames
+were captured from a real headset over hidraw. This driver has only run against that one
+headset, and the PRO X 2 is the only other model it has been tested with. Please report what
+you see.
+
+| Frame (64 bytes) | Bytes |
+| --- | --- |
+| request | `50 23 0b 00 03 1a 00 03 00 07 0a 00 ...` |
+| ack, not a reading | `50 23 03 00 03 1a 00 00 ...` |
+| battery | `50 23 0b 00 03 10 00 06 00 07 0a XX LL SS ...` |
+| charger event | `50 23 0b 00 03 10 00 06 00 07 00 XX LL SS ...`, sent unasked |
+| power | `50 23 05 00 03 00 00 PP ...`, followed by `50 23 04 00 05 10 PP ...` |
+
+`LL` is the level in percent and `SS` is `00` when discharging and `02` when charging. `XX`
+changes between readings and nobody knows what it is, so it is not used. `PP` is `00` when the
+headset is switched off and `01` when it comes on, so the battery reads as absent at once and
+is requested again one second after the headset comes on. Only the first of the two power
+frames is read. If a request still gets no reading within 3 s, for instance because the
+headset left the range, the battery reads as absent until the next poll. No frame for a full
+battery has been seen, so the status never reads "Full". Any other value of `LL`, `SS` or
+`PP` is ignored.
+
+The headset sends the charger event each time the charger is plugged or unplugged, and
+plugging it in sometimes sends two, the first of which still says `SS` is `00`. It looks like
+a battery frame, but it is not known what else it announces, so it is not read: it makes the
+driver request a reading one second later, and the status follows the charger within about a
+second instead of at the next poll.
+
+The power frames and the charger events were captured over several off and on cycles and
+several plug and unplug ones, on one headset. What a headset sends when it goes out of range,
+or runs flat, is not known. If you own one, these help to fill the gaps: the log of
+`echo 'module hid_logitech_headset +p' | sudo tee /sys/kernel/debug/dynamic_debug/control`
+and `dmesg` while charging until full, and with the headset taken out of range.
+
 ## Other headsets
 
-Only the PRO X 2 LIGHTSPEED `0af7` has been tested. The PRO X 2 variants `0afb` and `0afc`
-and the older G PRO / PRO X speak HID++ and belong to `hid-logitech-hidpp`. For other models,
-[HeadsetControl](https://github.com/Sapd/HeadsetControl) reads the battery from userspace.
+Only the PRO X 2 LIGHTSPEED `0af7` has been tested with this driver. The PRO X 2 variants
+`0afb` and `0afc` and the older G PRO / PRO X speak HID++ and belong to `hid-logitech-hidpp`.
+For other models, [HeadsetControl](https://github.com/Sapd/HeadsetControl) reads the battery from userspace.
 
 ### G522 LIGHTSPEED owners wanted
 
