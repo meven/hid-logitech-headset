@@ -22,42 +22,70 @@
 #endif
 
 /*
- * The receiver carries a consumer collection for the media keys and two vendor
- * collections. The battery answers on usage page 0xffa0, which exchanges fixed
- * size frames on report 0x51. One request is enough, there is no handshake.
+ * Both vendor collections exchange fixed size frames, and a request is a single
+ * frame with no handshake. What differs between the headsets is the report
+ * they use and the layout of the frames, so each one has a logi_headset_info.
  */
-#define LOGI_HEADSET_REPORT_ID		0x51
 #define LOGI_HEADSET_FRAME_SIZE		64
-
-/* Every frame names its kind in the second byte. */
-#define LOGI_HEADSET_KIND_ACK		0x03
-#define LOGI_HEADSET_KIND_POWER		0x05
-#define LOGI_HEADSET_KIND_BATTERY	0x0b
-
-/* Offsets into a battery frame, which carries a tag of its own. */
-#define LOGI_HEADSET_BATTERY_TAG	8
-#define LOGI_HEADSET_BATTERY_TAG_VALUE	0x04
-#define LOGI_HEADSET_BATTERY_LEVEL	10
-#define LOGI_HEADSET_BATTERY_STATE	12
-#define LOGI_HEADSET_STATE_CHARGING	0x02
-
-/*
- * A power frame carries zero here when the headset was switched off, and
- * non-zero when it came on.
- */
-#define LOGI_HEADSET_POWER_STATE	6
 
 #define LOGI_HEADSET_POLL_INTERVAL	(120 * HZ)
 
 /* Wait between a power-on event and the request, so the radio link settles. */
 #define LOGI_HEADSET_WAKE_DELAY		HZ
 
-static const u8 logi_headset_battery_request[] = {
-	LOGI_HEADSET_REPORT_ID, 0x08, 0x00, 0x03, 0x1a, 0x00, 0x03, 0x00, 0x04, 0x0a
+/*
+ * The PRO X 2 receiver carries a consumer collection for the media keys and
+ * two vendor collections. The battery answers on usage page 0xffa0, on report
+ * 0x51.
+ */
+#define LOGI_PRO_X_2_REPORT_ID		0x51
+
+/* Every frame names its kind in the second byte. */
+#define LOGI_PRO_X_2_KIND_ACK		0x03
+#define LOGI_PRO_X_2_KIND_POWER		0x05
+#define LOGI_PRO_X_2_KIND_BATTERY	0x0b
+
+/* Offsets into a battery frame, which carries a tag of its own. */
+#define LOGI_PRO_X_2_BATTERY_TAG	8
+#define LOGI_PRO_X_2_BATTERY_TAG_VALUE	0x04
+#define LOGI_PRO_X_2_BATTERY_LEVEL	10
+#define LOGI_PRO_X_2_BATTERY_STATE	12
+#define LOGI_PRO_X_2_STATE_CHARGING	0x02
+
+/*
+ * A power frame carries zero here when the headset was switched off, and
+ * non-zero when it came on.
+ */
+#define LOGI_PRO_X_2_POWER_STATE	6
+
+static const u8 logi_pro_x_2_battery_request[] = {
+	LOGI_PRO_X_2_REPORT_ID, 0x08, 0x00, 0x03, 0x1a, 0x00, 0x03, 0x00, 0x04, 0x0a
+};
+
+/* What a frame turned out to be, once the headset specific parser read it. */
+enum logi_headset_frame {
+	LOGI_HEADSET_FRAME_IGNORE,	/* not about the battery or the power */
+	LOGI_HEADSET_FRAME_BATTERY,	/* the reading holds a level and a state */
+	LOGI_HEADSET_FRAME_POWER_ON,
+	LOGI_HEADSET_FRAME_POWER_OFF,
+};
+
+struct logi_headset_reading {
+	int capacity;
+	bool charging;
+};
+
+struct logi_headset_info {
+	u8 report_id;
+	const u8 *request;
+	size_t request_size;
+	enum logi_headset_frame (*parse)(const u8 *data, int size,
+					 struct logi_headset_reading *reading);
 };
 
 struct logi_headset {
 	struct hid_device *hdev;
+	const struct logi_headset_info *info;
 	struct power_supply *battery;
 	struct power_supply_desc desc;
 	struct delayed_work poll;
@@ -139,6 +167,7 @@ static int logi_headset_get_property(struct power_supply *psy,
 
 static int logi_headset_ask(struct logi_headset *headset)
 {
+	const struct logi_headset_info *info = headset->info;
 	u8 *frame;
 	int ret;
 
@@ -146,8 +175,7 @@ static int logi_headset_ask(struct logi_headset *headset)
 	if (!frame)
 		return -ENOMEM;
 
-	memcpy(frame, logi_headset_battery_request,
-	       sizeof(logi_headset_battery_request));
+	memcpy(frame, info->request, info->request_size);
 
 	/* Same fallback as hidraw, for a device without an interrupt out endpoint. */
 	ret = hid_hw_output_report(headset->hdev, frame, LOGI_HEADSET_FRAME_SIZE);
@@ -178,36 +206,69 @@ static void logi_headset_poll(struct work_struct *work)
 	queue_delayed_work(system_dfl_wq, &headset->poll, LOGI_HEADSET_POLL_INTERVAL);
 }
 
+static enum logi_headset_frame
+logi_pro_x_2_parse(const u8 *data, int size, struct logi_headset_reading *reading)
+{
+	if (size <= LOGI_PRO_X_2_BATTERY_STATE)
+		return LOGI_HEADSET_FRAME_IGNORE;
+
+	switch (data[1]) {
+	case LOGI_PRO_X_2_KIND_BATTERY:
+		if (data[LOGI_PRO_X_2_BATTERY_TAG] != LOGI_PRO_X_2_BATTERY_TAG_VALUE ||
+		    data[LOGI_PRO_X_2_BATTERY_LEVEL] > 100)
+			return LOGI_HEADSET_FRAME_IGNORE;
+
+		reading->capacity = data[LOGI_PRO_X_2_BATTERY_LEVEL];
+		reading->charging = data[LOGI_PRO_X_2_BATTERY_STATE] ==
+				    LOGI_PRO_X_2_STATE_CHARGING;
+		return LOGI_HEADSET_FRAME_BATTERY;
+	case LOGI_PRO_X_2_KIND_POWER:
+		if (data[LOGI_PRO_X_2_POWER_STATE] == 0x00)
+			return LOGI_HEADSET_FRAME_POWER_OFF;
+		return LOGI_HEADSET_FRAME_POWER_ON;
+	case LOGI_PRO_X_2_KIND_ACK:
+	default:
+		return LOGI_HEADSET_FRAME_IGNORE;
+	}
+}
+
+static const struct logi_headset_info logi_pro_x_2_info = {
+	.report_id = LOGI_PRO_X_2_REPORT_ID,
+	.request = logi_pro_x_2_battery_request,
+	.request_size = sizeof(logi_pro_x_2_battery_request),
+	.parse = logi_pro_x_2_parse,
+};
+
 static int logi_headset_raw_event(struct hid_device *hdev,
 				  struct hid_report *report, u8 *data, int size)
 {
 	struct logi_headset *headset = hid_get_drvdata(hdev);
+	struct logi_headset_reading reading = {};
+	enum logi_headset_frame frame;
 	unsigned long flags;
 	bool changed = false;
 
-	if (size <= LOGI_HEADSET_BATTERY_STATE ||
-	    data[0] != LOGI_HEADSET_REPORT_ID)
+	if (size < 1 || data[0] != headset->info->report_id)
 		return 0;
 
+	frame = headset->info->parse(data, size, &reading);
+
 	spin_lock_irqsave(&headset->lock, flags);
-	switch (data[1]) {
-	case LOGI_HEADSET_KIND_BATTERY:
-		if (data[LOGI_HEADSET_BATTERY_TAG] == LOGI_HEADSET_BATTERY_TAG_VALUE &&
-		    data[LOGI_HEADSET_BATTERY_LEVEL] <= 100) {
-			headset->capacity = data[LOGI_HEADSET_BATTERY_LEVEL];
-			headset->charging = data[LOGI_HEADSET_BATTERY_STATE] ==
-					    LOGI_HEADSET_STATE_CHARGING;
-			headset->present = true;
+	switch (frame) {
+	case LOGI_HEADSET_FRAME_BATTERY:
+		headset->capacity = reading.capacity;
+		headset->charging = reading.charging;
+		headset->present = true;
+		changed = true;
+		break;
+	case LOGI_HEADSET_FRAME_POWER_OFF:
+		if (headset->present) {
+			headset->present = false;
 			changed = true;
 		}
 		break;
-	case LOGI_HEADSET_KIND_POWER:
-		if (data[LOGI_HEADSET_POWER_STATE] == 0x00) {
-			if (headset->present) {
-				headset->present = false;
-				changed = true;
-			}
-		} else if (!headset->wake_queued && !headset->removing) {
+	case LOGI_HEADSET_FRAME_POWER_ON:
+		if (!headset->wake_queued && !headset->removing) {
 			/*
 			 * The headset came on. Only the first such event moves the
 			 * request forward, so a burst of them cannot keep pushing it
@@ -218,8 +279,7 @@ static int logi_headset_raw_event(struct hid_device *hdev,
 					 LOGI_HEADSET_WAKE_DELAY);
 		}
 		break;
-	case LOGI_HEADSET_KIND_ACK:
-	default:
+	case LOGI_HEADSET_FRAME_IGNORE:
 		break;
 	}
 	spin_unlock_irqrestore(&headset->lock, flags);
@@ -235,15 +295,22 @@ static int logi_headset_probe(struct hid_device *hdev,
 			      const struct hid_device_id *id)
 {
 	struct power_supply_config cfg = {};
+	const struct logi_headset_info *info;
 	struct logi_headset *headset;
 	const char *name;
 	int ret;
+
+	/* A device added through new_id has no driver data. */
+	info = (const struct logi_headset_info *)id->driver_data;
+	if (!info)
+		return -EINVAL;
 
 	headset = devm_kzalloc(&hdev->dev, sizeof(*headset), GFP_KERNEL);
 	if (!headset)
 		return -ENOMEM;
 
 	headset->hdev = hdev;
+	headset->info = info;
 	spin_lock_init(&headset->lock);
 	INIT_DELAYED_WORK(&headset->poll, logi_headset_poll);
 	hid_set_drvdata(hdev, headset);
@@ -306,7 +373,8 @@ static void logi_headset_remove(struct hid_device *hdev)
 
 static const struct hid_device_id logi_headset_devices[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
-			 USB_DEVICE_ID_LOGITECH_PRO_X_2_LIGHTSPEED) },
+			 USB_DEVICE_ID_LOGITECH_PRO_X_2_LIGHTSPEED),
+	  .driver_data = (kernel_ulong_t)&logi_pro_x_2_info },
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, logi_headset_devices);
